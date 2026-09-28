@@ -223,7 +223,7 @@
 
 Name:           %{package_name}
 Version:        %{IPA_VERSION}
-Release:        10%{?rc_version:.%rc_version}%{?dist}
+Release:        10.1%{?rc_version:.%rc_version}%{?dist}
 Summary:        The Identity, Policy and Audit system
 
 License:        GPLv3+
@@ -279,6 +279,7 @@ Patch1001:      1001-Change-branding-to-IPA-and-Identity-Management.patch
 Patch2001:      CVE-2024-2698.patch
 Patch2002:      CVE-2024-3183.patch
 Patch2003:      trailing-patches-after-upstream-patches.patch
+Patch2004:      CVE-2025-7493.patch
 # RHEL spec file only: END
 
 BuildRequires:  openldap-devel
@@ -1763,6 +1764,9 @@ fi
 %endif
 
 %changelog
+* Wed Sep 09 2026 Jason Rodriguez <jrodriguez@ciq.com> - 4.10.1-10.1
+- Fix CVE-2025-7493 (ipa-kdb: enforce PAC presence on TGT for TGS-REQ)
+
 * Tue Aug 20 2024 Pratham Patel <ppatel@ciq.com> - 4.10.1-10
 - Fix CVE-2024-2698 and CVE-2024-3183
 
