@@ -223,7 +223,7 @@
 
 Name:           %{package_name}
 Version:        %{IPA_VERSION}
-Release:        10.1%{?rc_version:.%rc_version}%{?dist}
+Release:        10.2%{?rc_version:.%rc_version}%{?dist}
 Summary:        The Identity, Policy and Audit system
 
 License:        GPLv3+
@@ -280,6 +280,7 @@ Patch2001:      CVE-2024-2698.patch
 Patch2002:      CVE-2024-3183.patch
 Patch2003:      trailing-patches-after-upstream-patches.patch
 Patch2004:      CVE-2025-7493.patch
+Patch2005:      CVE-2026-76578.patch
 # RHEL spec file only: END
 
 BuildRequires:  openldap-devel
@@ -1764,6 +1765,10 @@ fi
 %endif
 
 %changelog
+* Fri Oct 16 2026 Andrew Jorgensen <ajorgens@ciq.com> - 4.10.1-10.2
+- Fix CVE-2026-76578: require authenticated binds for writes and harden ACIs
+- Fix a memory leak in password history updates
+
 * Wed Sep 09 2026 Jason Rodriguez <jrodriguez@ciq.com> - 4.10.1-10.1
 - Fix CVE-2025-7493 (ipa-kdb: enforce PAC presence on TGT for TGS-REQ)
 
