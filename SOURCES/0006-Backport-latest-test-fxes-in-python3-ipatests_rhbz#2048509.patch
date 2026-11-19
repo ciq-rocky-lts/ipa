@@ -1,0 +1,755 @@
+From 0edf915efbb39fac45c784171dd715ec6b28861a Mon Sep 17 00:00:00 2001
+From: Sumedh Sidhaye <ssidhaye@redhat.com>
+Date: Fri, 14 Jan 2022 19:55:13 +0530
+Subject: [PATCH] Added test automation for SHA384withRSA CSR support
+
+Scenario 1:
+Setup master with --ca-signing-algorithm=SHA384withRSA
+Run certutil and check Signing Algorithm
+
+Scenario 2:
+Setup a master
+Stop services
+Modify default.params.signingAlg in CS.cfg
+Restart services
+Resubmit cert (Resubmitted cert should have new Algorithm)
+
+Pagure Link: https://pagure.io/freeipa/issue/8906
+
+Signed-off-by: Sumedh Sidhaye <ssidhaye@redhat.com>
+Reviewed-By: Florence Blanc-Renaud <flo@redhat.com>
+Reviewed-By: Rob Crittenden <rcritten@redhat.com>
+Reviewed-By: Antonio Torres <antorres@redhat.com>
+---
+ .../test_integration/test_installation.py     | 63 +++++++++++++++++++
+ 1 file changed, 63 insertions(+)
+
+diff --git a/ipatests/test_integration/test_installation.py b/ipatests/test_integration/test_installation.py
+index 0947241ae..f2d372c0c 100644
+--- a/ipatests/test_integration/test_installation.py
++++ b/ipatests/test_integration/test_installation.py
+@@ -34,6 +34,7 @@ from ipatests.pytest_ipa.integration import tasks
+ from ipatests.pytest_ipa.integration.env_config import get_global_config
+ from ipatests.test_integration.base import IntegrationTest
+ from ipatests.test_integration.test_caless import CALessBase, ipa_certs_cleanup
++from ipatests.test_integration.test_cert import get_certmonger_fs_id
+ from ipaplatform import services
+ 
+ 
+@@ -1916,3 +1917,65 @@ class TestInstallWithoutNamed(IntegrationTest):
+         tasks.install_replica(
+             self.master, self.replicas[0], setup_ca=False, setup_dns=False
+         )
++
++
++class TestInstallwithSHA384withRSA(IntegrationTest):
++    num_replicas = 0
++
++    def test_install_master_withalgo_sha384withrsa(self, server_cleanup):
++        tasks.install_master(
++            self.master,
++            extra_args=['--ca-signing-algorithm=SHA384withRSA'],
++        )
++
++        # check Signing Algorithm post installation
++        dashed_domain = self.master.domain.realm.replace(".", '-')
++        cmd_args = ['certutil', '-L', '-d',
++                    '/etc/dirsrv/slapd-{}/'.format(dashed_domain),
++                    '-n', 'Server-Cert']
++        result = self.master.run_command(cmd_args)
++        assert 'SHA-384 With RSA Encryption' in result.stdout_text
++
++    def test_install_master_modify_existing(self, server_cleanup):
++        """
++        Setup a master
++        Stop services
++        Modify default.params.signingAlg in CS.cfg
++        Restart services
++        Resubmit cert (Resubmitted cert should have new Algorithm)
++        """
++        tasks.install_master(self.master)
++        self.master.run_command(['ipactl', 'stop'])
++        cs_cfg_content = self.master.get_file_contents(paths.CA_CS_CFG_PATH,
++                                                       encoding='utf-8')
++        new_lines = []
++        replace_str = "ca.signing.defaultSigningAlgorithm=SHA384withRSA"
++        ocsp_rep_str = "ca.ocsp_signing.defaultSigningAlgorithm=SHA384withRSA"
++        for line in cs_cfg_content.split('\n'):
++            if line.startswith('ca.signing.defaultSigningAlgorithm'):
++                new_lines.append(replace_str)
++            elif line.startswith('ca.ocsp_signing.defaultSigningAlgorithm'):
++                new_lines.append(ocsp_rep_str)
++            else:
++                new_lines.append(line)
++        self.master.put_file_contents(paths.CA_CS_CFG_PATH,
++                                      '\n'.join(new_lines))
++        self.master.run_command(['ipactl', 'start'])
++
++        cmd = ['getcert', 'list', '-f', paths.RA_AGENT_PEM]
++        result = self.master.run_command(cmd)
++        request_id = get_certmonger_fs_id(result.stdout_text)
++
++        # resubmit RA Agent cert
++        cmd = ['getcert', 'resubmit', '-f', paths.RA_AGENT_PEM]
++        self.master.run_command(cmd)
++
++        tasks.wait_for_certmonger_status(self.master,
++                                         ('CA_WORKING', 'MONITORING'),
++                                         request_id)
++
++        cmd_args = ['openssl', 'x509', '-in',
++                    paths.RA_AGENT_PEM, '-noout', '-text']
++        result = self.master.run_command(cmd_args)
++        assert_str = 'Signature Algorithm: sha384WithRSAEncryption'
++        assert assert_str in result.stdout_text
+-- 
+2.34.1
+
+From 8b22ee018c3bb7f58a1b6694a7fd611688f8e74f Mon Sep 17 00:00:00 2001
+From: Sumedh Sidhaye <ssidhaye@redhat.com>
+Date: Thu, 25 Nov 2021 17:48:20 +0530
+Subject: [PATCH] Extend test to see if replica is not shown when running
+ `ipa-replica-manage list -v <FQDN>`
+
+Related: https://pagure.io/freeipa/issue/8605
+
+Signed-off-by: Sumedh Sidhaye <ssidhaye@redhat.com>
+Reviewed-By: Florence Blanc-Renaud <flo@redhat.com>
+---
+ ipatests/test_integration/test_simple_replication.py | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/ipatests/test_integration/test_simple_replication.py b/ipatests/test_integration/test_simple_replication.py
+index 8de385144..17092a499 100644
+--- a/ipatests/test_integration/test_simple_replication.py
++++ b/ipatests/test_integration/test_simple_replication.py
+@@ -111,5 +111,6 @@ class TestSimpleReplication(IntegrationTest):
+         # has to be run with --force, there is no --unattended
+         self.master.run_command(['ipa-replica-manage', 'del',
+                                  self.replicas[0].hostname, '--force'])
+-        result = self.master.run_command(['ipa-replica-manage', 'list'])
++        result = self.master.run_command(
++            ['ipa-replica-manage', 'list', '-v', self.master.hostname])
+         assert self.replicas[0].hostname not in result.stdout_text
+-- 
+2.34.1
+
+From ba7ec71ba96280da3841ebe47df2a6dc1cd6341e Mon Sep 17 00:00:00 2001
+From: Mohammad Rizwan <myusuf@redhat.com>
+Date: Fri, 26 Nov 2021 12:11:21 +0530
+Subject: [PATCH] ipatests: Fix test_ipa_cert_fix.py::TestCertFixReplica
+ teardown
+
+Fixture `expire_certs` moves date back after renewing the certs.
+This is causing the ipa-replica to fail. This fix first uninstalls
+the server then moves back the date.
+
+Fixes: https://pagure.io/freeipa/issue/9052
+
+Signed-off-by: Mohammad Rizwan <myusuf@redhat.com>
+Reviewed-By: Florence Blanc-Renaud <flo@redhat.com>
+---
+ ipatests/test_integration/test_ipa_cert_fix.py | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/ipatests/test_integration/test_ipa_cert_fix.py b/ipatests/test_integration/test_ipa_cert_fix.py
+index 39904d5de..5b56054b4 100644
+--- a/ipatests/test_integration/test_ipa_cert_fix.py
++++ b/ipatests/test_integration/test_ipa_cert_fix.py
+@@ -389,6 +389,12 @@ class TestCertFixReplica(IntegrationTest):
+             setup_dns=False, extra_args=['--no-ntp']
+         )
+ 
++    @classmethod
++    def uninstall(cls, mh):
++        # Uninstall method is empty as the uninstallation is done in
++        # the fixture
++        pass
++
+     @pytest.fixture
+     def expire_certs(self):
+         # move system date to expire certs
+@@ -398,7 +404,8 @@ class TestCertFixReplica(IntegrationTest):
+         yield
+ 
+         # move date back on replica and master
+-        for host in self.master, self.replicas[0]:
++        for host in self.replicas[0], self.master:
++            tasks.uninstall_master(host)
+             tasks.move_date(host, 'start', '-3years-1days')
+ 
+     def test_renew_expired_cert_replica(self, expire_certs):
+-- 
+2.34.1
+
+From 465f1669a6c5abc72da1ecaf9aefa8488f80806c Mon Sep 17 00:00:00 2001
+From: Anuja More <amore@redhat.com>
+Date: Mon, 13 Dec 2021 17:37:05 +0530
+Subject: [PATCH] ipatests: Test default value of nsslapd-sizelimit.
+
+related : https://pagure.io/freeipa/issue/8962
+
+Signed-off-by: Anuja More <amore@redhat.com>
+Reviewed-By: Florence Blanc-Renaud <flo@redhat.com>
+---
+ ipatests/test_integration/test_installation.py | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/ipatests/test_integration/test_installation.py b/ipatests/test_integration/test_installation.py
+index 95cfaad54..0947241ae 100644
+--- a/ipatests/test_integration/test_installation.py
++++ b/ipatests/test_integration/test_installation.py
+@@ -1067,6 +1067,19 @@ class TestInstallMaster(IntegrationTest):
+         )
+         assert "nsslapd-db-locks" not in result.stdout_text
+ 
++    def test_nsslapd_sizelimit(self):
++        """ Test for default value of nsslapd-sizelimit.
++
++        Related : https://pagure.io/freeipa/issue/8962
++        """
++        result = tasks.ldapsearch_dm(
++            self.master,
++            "cn=config",
++            ["nsslapd-sizelimit"],
++            scope="base"
++        )
++        assert "nsslapd-sizelimit: 100000" in result.stdout_text
++
+     def test_admin_root_alias_CVE_2020_10747(self):
+         # Test for CVE-2020-10747 fix
+         # https://bugzilla.redhat.com/show_bug.cgi?id=1810160
+-- 
+2.34.1
+
+From cbd9ac6ab07dfb60f67da762fdd70856ad35c230 Mon Sep 17 00:00:00 2001
+From: Mohammad Rizwan <myusuf@redhat.com>
+Date: Thu, 25 Nov 2021 13:10:05 +0530
+Subject: [PATCH] ipatests: Test empty cert request doesn't force certmonger to
+ segfault
+
+When empty cert request is submitted to certmonger, it goes to
+segfault. This fix test that if something like this happens,
+certmonger should gracefuly handle it
+
+and some PEP8 fixes
+
+related: https://pagure.io/certmonger/issue/191
+
+Signed-off-by: Mohammad Rizwan <myusuf@redhat.com>
+---
+ ipatests/test_integration/test_cert.py | 79 +++++++++++++++++++++++++-
+ 1 file changed, 78 insertions(+), 1 deletion(-)
+
+diff --git a/ipatests/test_integration/test_cert.py b/ipatests/test_integration/test_cert.py
+index 5ffb8c608..0518d7954 100644
+--- a/ipatests/test_integration/test_cert.py
++++ b/ipatests/test_integration/test_cert.py
+@@ -14,6 +14,7 @@ import random
+ import re
+ import string
+ import time
++import textwrap
+ 
+ from ipaplatform.paths import paths
+ from ipapython.dn import DN
+@@ -193,7 +194,7 @@ class TestInstallMasterClient(IntegrationTest):
+         tasks.kinit_admin(self.master)
+         tasks.user_add(self.master, user)
+ 
+-        for id in (0,1):
++        for id in (0, 1):
+             csr_file = f'{id}.csr'
+             key_file = f'{id}.key'
+             cert_file = f'{id}.crt'
+@@ -584,3 +585,79 @@ class TestCAShowErrorHandling(IntegrationTest):
+         error_msg = 'ipa: ERROR: The certificate for ' \
+                     '{} is not available on this server.'.format(lwca)
+         assert error_msg in result.stderr_text
++
++    def test_certmonger_empty_cert_not_segfault(self):
++        """Test empty cert request doesn't force certmonger to segfault
++
++        Test scenario:
++        create a cert request file in /var/lib/certmonger/requests which is
++        missing most of the required information, and ask request a new
++        certificate to certmonger. The wrong request file should not make
++        certmonger crash.
++
++        related: https://pagure.io/certmonger/issue/191
++        """
++        empty_cert_req_content = textwrap.dedent("""
++        id=dogtag-ipa-renew-agent
++        key_type=UNSPECIFIED
++        key_gen_type=UNSPECIFIED
++        key_size=0
++        key_gen_size=0
++        key_next_type=UNSPECIFIED
++        key_next_gen_type=UNSPECIFIED
++        key_next_size=0
++        key_next_gen_size=0
++        key_preserve=0
++        key_storage_type=NONE
++        key_perms=0
++        key_requested_count=0
++        key_issued_count=0
++        cert_storage_type=FILE
++        cert_perms=0
++        cert_is_ca=0
++        cert_ca_path_length=0
++        cert_no_ocsp_check=0
++        last_need_notify_check=19700101000000
++        last_need_enroll_check=19700101000000
++        template_is_ca=0
++        template_ca_path_length=-1
++        template_no_ocsp_check=0
++        state=NEED_KEY_PAIR
++        autorenew=0
++        monitor=0
++        submitted=19700101000000
++        """)
++        # stop certmonger service
++        self.master.run_command(['systemctl', 'stop', 'certmonger'])
++
++        # place an empty cert request file to certmonger request dir
++        self.master.put_file_contents(
++            os.path.join(paths.CERTMONGER_REQUESTS_DIR, '20211125062617'),
++            empty_cert_req_content
++        )
++
++        # start certmonger, it should not fail
++        self.master.run_command(['systemctl', 'start', 'certmonger'])
++
++        # request a new cert, should succeed and certmonger doesn't goes
++        # to segfault
++        result = self.master.run_command([
++            "ipa-getcert", "request",
++            "-f", os.path.join(paths.OPENSSL_CERTS_DIR, "test.pem"),
++            "-k", os.path.join(paths.OPENSSL_PRIVATE_DIR, "test.key"),
++        ])
++        request_id = re.findall(r'\d+', result.stdout_text)
++
++        # check if certificate is in MONITORING state
++        status = tasks.wait_for_request(self.master, request_id[0], 50)
++        assert status == "MONITORING"
++
++        self.master.run_command(
++            ['ipa-getcert', 'stop-tracking', '-i', request_id[0]]
++        )
++        self.master.run_command([
++            'rm', '-rf',
++            os.path.join(paths.CERTMONGER_REQUESTS_DIR, '20211125062617'),
++            os.path.join(paths.OPENSSL_CERTS_DIR, 'test.pem'),
++            os.path.join(paths.OPENSSL_PRIVATE_DIR, 'test.key')
++        ])
+-- 
+2.34.1
+
+From edbd8f692a28fc999b92e9032614d366511db323 Mon Sep 17 00:00:00 2001
+From: Anuja More <amore@redhat.com>
+Date: Mon, 6 Dec 2021 20:50:01 +0530
+Subject: [PATCH] ipatests: webui: Tests for subordinate ids.
+
+Added web-ui tests to verify where operations
+using subordinate ids are working as expected.
+
+Related : https://pagure.io/freeipa/issue/8361
+
+Signed-off-by: Anuja More <amore@redhat.com>
+Reviewed-By: Michal Polovka <mpolovka@redhat.com>
+Reviewed-By: Florence Blanc-Renaud <flo@redhat.com>
+Reviewed-By: Florence Blanc-Renaud <flo@redhat.com>
+---
+ ipatests/test_webui/test_subid.py | 141 ++++++++++++++++++++++++++++++
+ ipatests/test_webui/ui_driver.py  |  28 ++++++
+ 2 files changed, 169 insertions(+)
+ create mode 100644 ipatests/test_webui/test_subid.py
+
+diff --git a/ipatests/test_webui/test_subid.py b/ipatests/test_webui/test_subid.py
+new file mode 100644
+index 000000000..26decdba0
+--- /dev/null
++++ b/ipatests/test_webui/test_subid.py
+@@ -0,0 +1,141 @@
++
++"""
++Tests for subordinateid.
++"""
++
++from ipatests.test_webui.ui_driver import UI_driver
++import ipatests.test_webui.data_config as config_data
++import ipatests.test_webui.data_user as user_data
++from ipatests.test_webui.ui_driver import screenshot
++import re
++
++
++class test_subid(UI_driver):
++
++    def add_user(self, pkey, name, surname):
++        self.add_record('user', {
++            'pkey': pkey,
++            'add': [
++                ('textbox', 'uid', pkey),
++                ('textbox', 'givenname', name),
++                ('textbox', 'sn', surname),
++            ]
++        })
++
++    def set_default_subid(self):
++        self.navigate_to_entity(config_data.ENTITY)
++        self.check_option('ipauserdefaultsubordinateid', 'checked')
++        self.facet_button_click('save')
++
++    def get_user_count(self, user_pkey):
++        self.navigate_to_entity('subid', facet='search')
++        self.apply_search_filter(user_pkey)
++        self.wait_for_request()
++        return self.get_rows()
++
++    @screenshot
++    def test_set_defaultsubid(self):
++        """
++        Test to verify that enable/disable is working for
++        adding subids to new users.
++        """
++        self.init_app()
++        self.add_record(user_data.ENTITY, user_data.DATA2)
++        self.navigate_to_entity(config_data.ENTITY)
++        # test subid can be enabled/disabled.
++        self.set_default_subid()
++        assert self.get_field_checked('ipauserdefaultsubordinateid')
++        self.set_default_subid()
++        assert not self.get_field_checked('ipauserdefaultsubordinateid')
++
++    @screenshot
++    def test_user_defaultsubid(self):
++        """
++        Test to verify that subid is generated for new user.
++        """
++        self.init_app()
++        user_pkey = "some-user"
++
++        self.set_default_subid()
++        assert self.get_field_checked('ipauserdefaultsubordinateid')
++
++        before_count = self.get_user_count(user_pkey)
++        assert len(before_count) == 0
++
++        self.add_user(user_pkey, 'Some', 'User')
++        after_count = self.get_user_count(user_pkey)
++        assert len(after_count) == 1
++
++    @screenshot
++    def test_user_subid_mod_desc(self):
++        """
++        Test to verify that auto-assigned subid description is modified.
++        """
++        self.init_app()
++        self.navigate_to_record("some-user")
++        self.switch_to_facet('memberof_subid')
++        rows = self.get_rows()
++        self.navigate_to_row_record(rows[-1])
++        self.fill_textbox("description", "some-user-subid-desc")
++        self.facet_button_click('save')
++
++    @screenshot
++    def test_admin_subid(self):
++        """
++        Test to verify that subid range is created with owner admin.
++        """
++        self.init_app()
++        self.navigate_to_entity('subid', facet='search')
++        self.facet_button_click('add')
++        self.select_combobox('ipaowner', 'admin')
++        self.dialog_button_click('add')
++        self.wait(0.3)
++        self.assert_no_error_dialog()
++
++    @screenshot
++    def test_admin_subid_negative(self):
++        """
++        Test to verify that readding the subid fails with error.
++        """
++        self.init_app()
++        self.navigate_to_entity('subid', facet='search')
++        self.facet_button_click('add')
++        self.select_combobox('ipaowner', 'admin')
++        self.dialog_button_click('add')
++        self.wait(0.3)
++        err_dialog = self.get_last_error_dialog(dialog_name='error_dialog')
++        text = self.get_text('.modal-body div p', err_dialog)
++        text = text.strip()
++        pattern = r'Subordinate id with with name .* already exists.'
++        assert re.search(pattern, text) is not None
++        self.close_all_dialogs()
++
++    @screenshot
++    def test_user_subid_add(self):
++        """
++        Test to verify that subid range is created for given user.
++        """
++        self.init_app()
++        self.navigate_to_entity('subid', facet='search')
++        before_count = self.get_rows()
++        self.facet_button_click('add')
++        self.select_combobox('ipaowner', user_data.PKEY2)
++        self.dialog_button_click('add')
++        self.wait(0.3)
++        self.assert_no_error_dialog()
++        after_count = self.get_rows()
++        assert len(before_count) < len(after_count)
++
++    @screenshot
++    def test_subid_del(self):
++        """
++        Test to remove subordinate id for given user.
++        """
++        self.init_app()
++        self.navigate_to_entity('subid', facet='search')
++        user_uid = self.get_record_pkey("some-user", "ipaowner",
++                                        table_name="ipauniqueid")
++        before_count = self.get_rows()
++        self.delete_record(user_uid, table_name="ipauniqueid")
++        after_count = self.get_rows()
++        assert len(before_count) > len(after_count)
+diff --git a/ipatests/test_webui/ui_driver.py b/ipatests/test_webui/ui_driver.py
+index 46fd512ae..77fd74e49 100644
+--- a/ipatests/test_webui/ui_driver.py
++++ b/ipatests/test_webui/ui_driver.py
+@@ -1151,6 +1151,34 @@ class UI_driver:
+                 return row
+         return None
+ 
++    def get_row_by_column_value(self, key, column_name, parent=None,
++                                table_name=None):
++        """
++        Get the first matched row element of a search table with given key
++        matched against selected column. None if not found
++        """
++        rows = self.get_rows(parent, table_name)
++        s = "td div[name='%s']" % column_name
++        for row in rows:
++            has = self.find(s, By.CSS_SELECTOR, row)
++            if has.text == key:
++                return row
++        return None
++
++    def get_record_pkey(self, key, column, parent=None, table_name=None):
++        """
++        Get record pkey if value of column is known
++        """
++        row = self.get_row_by_column_value(key,
++                                           column_name=column,
++                                           parent=parent,
++                                           table_name=table_name)
++        val = None
++        if row:
++            el = self.find("td input", By.CSS_SELECTOR, row)
++            val = el.get_attribute("value")
++        return val
++
+     def navigate_to_row_record(self, row, pkey_column=None):
+         """
+         Navigate to record by clicking on a link.
+-- 
+2.34.1
+
+From 419d7fd6e5a9ed2d356ad05eef1043309f5646ef Mon Sep 17 00:00:00 2001
+From: Michal Polovka <mpolovka@redhat.com>
+Date: Fri, 7 Jan 2022 12:12:26 +0100
+Subject: [PATCH] ipatests: webui: Use safe-loader for loading YAML
+ configuration file
+
+FullLoader class for YAML loader was introduced in version 5.1 which
+also deprecated default loader. SafeLoader, however, stays consistent
+across the versions and brings added security.
+
+This fix is necessary as PyYAML > 5.1 is not available in downstream.
+
+Related: https://pagure.io/freeipa/issue/9009
+
+Signed-off-by: Michal Polovka <mpolovka@redhat.com>
+Reviewed-By: Rob Crittenden <rcritten@redhat.com>
+---
+ ipatests/test_webui/ui_driver.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/ipatests/test_webui/ui_driver.py b/ipatests/test_webui/ui_driver.py
+index 77fd74e49..519efee9b 100644
+--- a/ipatests/test_webui/ui_driver.py
++++ b/ipatests/test_webui/ui_driver.py
+@@ -192,7 +192,7 @@ class UI_driver:
+         if not NO_YAML and os.path.isfile(path):
+             try:
+                 with open(path, 'r') as conf:
+-                    cls.config = yaml.load(stream=conf, Loader=yaml.FullLoader)
++                    cls.config = yaml.safe_load(stream=conf)
+             except yaml.YAMLError as e:
+                 pytest.skip("Invalid Web UI config.\n%s" % e)
+             except IOError as e:
+-- 
+2.34.1
+
+From 5444da016edc416c0c9481c660c013053dbb93b5 Mon Sep 17 00:00:00 2001
+From: Mohammad Rizwan <myusuf@redhat.com>
+Date: Thu, 18 Nov 2021 18:43:22 +0530
+Subject: [PATCH] PEP8 Fixes
+
+Signed-off-by: Mohammad Rizwan <myusuf@redhat.com>
+---
+ .../test_integration/test_replica_promotion.py     | 14 +++++++-------
+ 1 file changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/ipatests/test_integration/test_replica_promotion.py b/ipatests/test_integration/test_replica_promotion.py
+index 1a4e9bc12..c328b1a08 100644
+--- a/ipatests/test_integration/test_replica_promotion.py
++++ b/ipatests/test_integration/test_replica_promotion.py
+@@ -138,7 +138,6 @@ class TestReplicaPromotionLevel1(ReplicaPromotionBase):
+         assert res.returncode == 1
+         assert expected_err in res.stderr_text
+ 
+-
+     @replicas_cleanup
+     def test_one_command_installation(self):
+         """
+@@ -150,11 +149,11 @@ class TestReplicaPromotionLevel1(ReplicaPromotionBase):
+         Firewall(self.replicas[0]).enable_services(["freeipa-ldap",
+                                                     "freeipa-ldaps"])
+         self.replicas[0].run_command(['ipa-replica-install', '-w',
+-                                     self.master.config.admin_password,
+-                                     '-n', self.master.domain.name,
+-                                     '-r', self.master.domain.realm,
+-                                     '--server', self.master.hostname,
+-                                     '-U'])
++                                      self.master.config.admin_password,
++                                      '-n', self.master.domain.name,
++                                      '-r', self.master.domain.realm,
++                                      '--server', self.master.hostname,
++                                      '-U'])
+         # Ensure that pkinit is properly configured, test for 7566
+         result = self.replicas[0].run_command(['ipa-pkinit-manage', 'status'])
+         assert "PKINIT is enabled" in result.stdout_text
+@@ -321,7 +320,7 @@ class TestWrongClientDomain(IntegrationTest):
+         result1 = client.run_command(['ipa-replica-install', '-U', '-w',
+                                       self.master.config.dirman_password],
+                                      raiseonerr=False)
+-        assert(result1.returncode == 0), (
++        assert (result1.returncode == 0), (
+             'Failed to promote the client installed with the upcase domain name')
+ 
+     def test_client_rollback(self):
+@@ -355,6 +354,7 @@ class TestWrongClientDomain(IntegrationTest):
+         assert("An error occurred while removing SSSD" not in
+                result.stdout_text)
+ 
++
+ class TestRenewalMaster(IntegrationTest):
+ 
+     topology = 'star'
+-- 
+2.34.1
+
+From 1d19b860d4cd3bd65a4b143b588425d9a64237fd Mon Sep 17 00:00:00 2001
+From: Mohammad Rizwan <myusuf@redhat.com>
+Date: Thu, 18 Nov 2021 18:36:58 +0530
+Subject: [PATCH] Test cases for ipa-replica-conncheck command
+
+Following test cases would be checked:
+- when called with --principal (it should then prompt for a password)
+- when called with --principal / --password
+- when called without principal and password but with a kerberos TGT,
+  kinit admin done before calling ipa-replica-conncheck
+- when called without principal and password, and without any kerberos
+  TGT (it should default to principal=admin and prompt for a password)
+
+related: https://pagure.io/freeipa/issue/9047
+
+Signed-off-by: Mohammad Rizwan <myusuf@redhat.com>
+---
+ .../test_replica_promotion.py                 | 70 +++++++++++++++++++
+ 1 file changed, 70 insertions(+)
+
+diff --git a/ipatests/test_integration/test_replica_promotion.py b/ipatests/test_integration/test_replica_promotion.py
+index b9c56f775..1a4e9bc12 100644
+--- a/ipatests/test_integration/test_replica_promotion.py
++++ b/ipatests/test_integration/test_replica_promotion.py
+@@ -437,6 +437,76 @@ class TestRenewalMaster(IntegrationTest):
+         self.assertCARenewalMaster(master, replica.hostname)
+         self.assertCARenewalMaster(replica, replica.hostname)
+ 
++    def test_replica_concheck(self):
++        """Test cases for ipa-replica-conncheck command
++
++        Following test cases would be checked:
++        - when called with --principal (it should then prompt for a password)
++        - when called with --principal / --password
++        - when called without principal and password but with a kerberos TGT,
++          kinit admin done before calling ipa-replica-conncheck
++        - when called without principal and password, and without any kerberos
++          TGT (it should default to principal=admin and prompt for a password)
++
++          related: https://pagure.io/freeipa/issue/9047
++        """
++        exp_str1 = "Connection from replica to master is OK."
++        exp_str2 = "Connection from master to replica is OK"
++        tasks.kdestroy_all(self.replicas[0])
++        # when called with --principal (it should then prompt for a password)
++        result = self.replicas[0].run_command(
++            ['ipa-replica-conncheck', '--auto-master-check',
++             '--master', self.master.hostname,
++             '-r', self.replicas[0].domain.realm,
++             '-p', self.replicas[0].config.admin_name],
++            stdin_text=self.master.config.admin_password
++        )
++        assert result.returncode == 0
++        assert (
++            exp_str1 in result.stderr_text and exp_str2 in result.stderr_text
++        )
++
++        # when called with --principal / --password
++        result = self.replicas[0].run_command([
++            'ipa-replica-conncheck', '--auto-master-check',
++            '--master', self.master.hostname,
++            '-r', self.replicas[0].domain.realm,
++            '-p', self.replicas[0].config.admin_name,
++            '-w', self.master.config.admin_password
++        ])
++        assert result.returncode == 0
++        assert (
++            exp_str1 in result.stderr_text and exp_str2 in result.stderr_text
++        )
++
++        # when called without principal and password, and without
++        # any kerberos TGT, it should default to principal=admin
++        # and prompt for a password
++        result = self.replicas[0].run_command(
++            ['ipa-replica-conncheck', '--auto-master-check',
++             '--master', self.master.hostname,
++             '-r', self.replicas[0].domain.realm],
++            stdin_text=self.master.config.admin_password
++        )
++        assert result.returncode == 0
++        assert (
++            exp_str1 in result.stderr_text and exp_str2 in result.stderr_text
++        )
++
++        # when called without principal and password but with a kerberos TGT,
++        # kinit admin done before calling ipa-replica-conncheck
++        tasks.kinit_admin(self.replicas[0])
++        result = self.replicas[0].run_command(
++            ['ipa-replica-conncheck', '--auto-master-check',
++             '--master', self.master.hostname,
++             '-r', self.replicas[0].domain.realm]
++        )
++        assert result.returncode == 0
++        assert (
++            exp_str1 in result.stderr_text and exp_str2 in result.stderr_text
++        )
++        tasks.kdestroy_all(self.replicas[0])
++
+     def test_automatic_renewal_master_transfer_ondelete(self):
+         # Test that after replica uninstallation, master overtakes the cert
+         # renewal master role from replica (which was previously set there)
+-- 
+2.34.1
+

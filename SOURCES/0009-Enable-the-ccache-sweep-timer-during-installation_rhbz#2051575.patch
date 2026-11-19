@@ -1,0 +1,118 @@
+From 9b6d0bb1245c4891ccc270f360d0f72a4b1444c1 Mon Sep 17 00:00:00 2001
+From: Rob Crittenden <rcritten@redhat.com>
+Date: Mon, 7 Feb 2022 10:39:55 -0500
+Subject: [PATCH] Enable the ccache sweep timer during installation
+
+The timer was only being enabled during package installation
+if IPA was configured. So effectively only on upgrade.
+
+Add as a separate installation step after the ccache directory
+is configured.
+
+Fixes: https://pagure.io/freeipa/issue/9107
+
+Signed-off-by: Rob Crittenden <rcritten@redhat.com>
+Reviewed-By: Alexander Bokovoy <abokovoy@redhat.com>
+---
+ ipaserver/install/httpinstance.py | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/ipaserver/install/httpinstance.py b/ipaserver/install/httpinstance.py
+index 732bb58d4..50ccf5e50 100644
+--- a/ipaserver/install/httpinstance.py
++++ b/ipaserver/install/httpinstance.py
+@@ -140,6 +140,8 @@ class HTTPInstance(service.Service):
+         self.step("publish CA cert", self.__publish_ca_cert)
+         self.step("clean up any existing httpd ccaches",
+                   self.remove_httpd_ccaches)
++        self.step("enable ccache sweep",
++                  self.enable_ccache_sweep)
+         self.step("configuring SELinux for httpd", self.configure_selinux_for_httpd)
+         if not self.is_kdcproxy_configured():
+             self.step("create KDC proxy config", self.create_kdcproxy_conf)
+@@ -177,6 +179,11 @@ class HTTPInstance(service.Service):
+             [paths.SYSTEMD_TMPFILES, '--create', '--prefix', paths.IPA_CCACHES]
+         )
+ 
++    def enable_ccache_sweep(self):
++        ipautil.run(
++            [paths.SYSTEMCTL, 'enable', 'ipa-ccache-sweep.timer']
++        )
++
+     def __configure_http(self):
+         self.update_httpd_service_ipa_conf()
+         self.update_httpd_wsgi_conf()
+-- 
+2.34.1
+
+From 0d9eb3d515385412abefe9c33e0099ea14f33cbc Mon Sep 17 00:00:00 2001
+From: Mohammad Rizwan <myusuf@redhat.com>
+Date: Wed, 9 Feb 2022 18:56:21 +0530
+Subject: [PATCH] Test ipa-ccache-sweep.timer enabled by default during
+ installation
+
+This test checks that ipa-ccache-sweep.timer is enabled by default
+during the ipa installation.
+
+related: https://pagure.io/freeipa/issue/9107
+
+Signed-off-by: Mohammad Rizwan <myusuf@redhat.com>
+Reviewed-By: Alexander Bokovoy <abokovoy@redhat.com>
+---
+ .../test_integration/test_installation.py     | 19 +++++++++++++++++--
+ 1 file changed, 17 insertions(+), 2 deletions(-)
+
+diff --git a/ipatests/test_integration/test_installation.py b/ipatests/test_integration/test_installation.py
+index f2d372c0c..63edbaa2b 100644
+--- a/ipatests/test_integration/test_installation.py
++++ b/ipatests/test_integration/test_installation.py
+@@ -475,7 +475,7 @@ class TestInstallCA(IntegrationTest):
+ 
+         # Tweak sysrestore.state to drop installation section
+         self.master.run_command(
+-            ['sed','-i', r's/\[installation\]/\[badinstallation\]/',
++            ['sed', '-i', r's/\[installation\]/\[badinstallation\]/',
+              os.path.join(paths.SYSRESTORE, SYSRESTORE_STATEFILE)])
+ 
+         # Re-run installation check and it should fall back to old method
+@@ -485,7 +485,7 @@ class TestInstallCA(IntegrationTest):
+ 
+         # Restore installation section.
+         self.master.run_command(
+-            ['sed','-i', r's/\[badinstallation\]/\[installation\]/',
++            ['sed', '-i', r's/\[badinstallation\]/\[installation\]/',
+              os.path.join(paths.SYSRESTORE, SYSRESTORE_STATEFILE)])
+ 
+         # Uninstall and confirm that the old method reports correctly
+@@ -690,6 +690,7 @@ def get_pki_tomcatd_pid(host):
+             break
+     return(pid)
+ 
++
+ def get_ipa_services_pids(host):
+     ipa_services_name = [
+         "krb5kdc", "kadmin", "named", "httpd", "ipa-custodia",
+@@ -1309,6 +1310,20 @@ class TestInstallMasterKRA(IntegrationTest):
+     def test_install_master(self):
+         tasks.install_master(self.master, setup_dns=False, setup_kra=True)
+ 
++    def test_ipa_ccache_sweep_timer_enabled(self):
++        """Test ipa-ccache-sweep.timer enabled by default during installation
++
++        This test checks that ipa-ccache-sweep.timer is enabled by default
++        during the ipa installation.
++
++        related: https://pagure.io/freeipa/issue/9107
++        """
++        result = self.master.run_command(
++            ['systemctl', 'is-enabled', 'ipa-ccache-sweep.timer'],
++            raiseonerr=False
++        )
++        assert 'enabled' in result.stdout_text
++
+     def test_install_dns(self):
+         tasks.install_dns(self.master)
+ 
+-- 
+2.34.1
+

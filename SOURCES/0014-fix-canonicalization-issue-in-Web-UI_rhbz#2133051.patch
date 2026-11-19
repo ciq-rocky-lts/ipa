@@ -1,0 +1,62 @@
+From 109cd579e3b089b7fad4c92bf25594eba1af8a21 Mon Sep 17 00:00:00 2001
+From: Alexander Bokovoy <abokovoy@redhat.com>
+Date: Tue, 23 Aug 2022 16:58:07 +0300
+Subject: [PATCH] fix canonicalization issue in Web UI
+
+When Kerberos principal alias is used to login to a Web UI, we end up
+with a request that is authenticated by a ticket issued in the alias
+name but metadata processed for the canonical user name. This confuses
+RPC layer of Web UI code and causes infinite loop to reload the page.
+
+Fix it by doing two things:
+
+ - force use of canonicalization of an enterprise principal on server
+   side, not just specifying that the principal is an enterprise one;
+
+ - recognize that a principal in the whoami()-returned object can have
+   aliases and the principal returned by the server in the JSON response
+   may be one of those aliases.
+
+Fixes: https://pagure.io/freeipa/issue/9226
+
+Signed-off-by: Alexander Bokovoy <abokovoy@redhat.com>
+Reviewed-By: Armando Neto <abiagion@redhat.com>
+---
+ install/ui/src/freeipa/ipa.js | 8 +++++++-
+ ipaserver/rpcserver.py        | 1 +
+ 2 files changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/install/ui/src/freeipa/ipa.js b/install/ui/src/freeipa/ipa.js
+index 758db1b00..a08d632e9 100644
+--- a/install/ui/src/freeipa/ipa.js
++++ b/install/ui/src/freeipa/ipa.js
+@@ -271,7 +271,13 @@ var IPA = function () {
+                             var cn = that.whoami.data.krbcanonicalname;
+                             if (cn) that.principal = cn[0];
+                             if (!that.principal) {
+-                                that.principal = that.whoami.data.krbprincipalname[0];
++                                var principal = data.principal;
++                                var idx = that.whoami.data.krbprincipalname.indexOf(principal);
++                                if (idx > -1) {
++                                    that.principal = principal;
++                                } else {
++                                    that.principal = that.whoami.data.krbprincipalname[0];
++                                }
+                             }
+                         } else if (entity === 'idoverrideuser') {
+                             that.principal = that.whoami.data.ipaoriginaluid[0];
+diff --git a/ipaserver/rpcserver.py b/ipaserver/rpcserver.py
+index 1f85e9898..4e8a08b66 100644
+--- a/ipaserver/rpcserver.py
++++ b/ipaserver/rpcserver.py
+@@ -1109,6 +1109,7 @@ class login_password(Backend, KerberosSession):
+                 ccache_name,
+                 armor_ccache_name=armor_path,
+                 enterprise=True,
++                canonicalize=True,
+                 lifetime=self.api.env.kinit_lifetime)
+ 
+             if armor_path:
+-- 
+2.37.3
+

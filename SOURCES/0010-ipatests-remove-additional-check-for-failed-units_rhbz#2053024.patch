@@ -1,0 +1,31 @@
+From b36bcf4ea5ed93baa4dc63f8e2be542d678211fb Mon Sep 17 00:00:00 2001
+From: Anuja More <amore@redhat.com>
+Date: Thu, 10 Feb 2022 18:49:06 +0530
+Subject: [PATCH] ipatests: remove additional check for failed units.
+
+On RHEL tests are randomly failing because of this check
+and the test doesn't need to check this.
+
+Related : https://pagure.io/freeipa/issue/9108
+
+Signed-off-by: Anuja More <amore@redhat.com>
+Reviewed-By: Florence Blanc-Renaud <flo@redhat.com>
+---
+ ipatests/test_integration/test_otp.py | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/ipatests/test_integration/test_otp.py b/ipatests/test_integration/test_otp.py
+index d8ce527ca..6e70ddcb3 100644
+--- a/ipatests/test_integration/test_otp.py
++++ b/ipatests/test_integration/test_otp.py
+@@ -316,7 +316,6 @@ class TestOTPToken(IntegrationTest):
+         check_services = self.master.run_command(
+             ['systemctl', 'list-units', '--state=failed']
+         )
+-        assert "0 loaded units listed" in check_services.stdout_text
+         assert "ipa-otpd" not in check_services.stdout_text
+         # Be sure no services are running and failed units
+         self.master.run_command(['killall', 'ipa-otpd'], raiseonerr=False)
+-- 
+2.34.1
+

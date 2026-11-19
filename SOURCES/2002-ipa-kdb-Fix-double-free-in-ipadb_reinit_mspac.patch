@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Julien Rische <jrische@redhat.com>
+Date: Tue, 20 Feb 2024 15:14:24 +0100
+Subject: [PATCH 2002/2056] ipa-kdb: Fix double free in ipadb_reinit_mspac()
+
+Fixes: https://pagure.io/freeipa/issue/9535
+
+Signed-off-by: Julien Rische <jrische@redhat.com>
+Reviewed-By: Florence Blanc-Renaud <flo@redhat.com>
+(cherry picked from commit dd27d225524aa81c038a970961a4f878cf742e2a)
+---
+ daemons/ipa-kdb/ipa_kdb_mspac.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/daemons/ipa-kdb/ipa_kdb_mspac.c b/daemons/ipa-kdb/ipa_kdb_mspac.c
+index 1151b86da..febb9643f 100644
+--- a/daemons/ipa-kdb/ipa_kdb_mspac.c
++++ b/daemons/ipa-kdb/ipa_kdb_mspac.c
+@@ -3309,6 +3309,7 @@ ipadb_reinit_mspac(struct ipadb_context *ipactx, bool force_reinit,
+     }
+ 
+     free(resstr);
++    resstr = NULL;
+ 
+     flat_server_name = get_server_netbios_name(ipactx);
+     if (!flat_server_name) {

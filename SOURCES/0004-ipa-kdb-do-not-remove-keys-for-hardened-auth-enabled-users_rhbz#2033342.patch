@@ -1,0 +1,122 @@
+From 6d70421f57d0eca066a922e09416ef7195ee96d4 Mon Sep 17 00:00:00 2001
+From: Julien Rische <jrische@redhat.com>
+Date: Tue, 1 Feb 2022 16:43:09 +0100
+Subject: [PATCH] ipa-kdb: do not remove keys for hardened auth-enabled users
+
+Since 5d51ae5, principal keys were dropped in case user auth indicator
+was not including password. Thereafter, the key removal behavior was
+removed by 15ff9c8 in the context of the kdcpolicy plugin introduction.
+Support for hardened pre-auth methods (FAST and SPAKE) was added in
+d057040, and the removal of principal keys was restored afterwards by
+f0d12b7, but not taking the new hardened auth indicator into account.
+
+Fixes: https://pagure.io/freeipa/issue/9065
+Related to: https://pagure.io/freeipa/issue/8001
+
+Signed-off-by: Julien Rische <jrische@redhat.com>
+Reviewed-By: Alexander Bokovoy <abokovoy@redhat.com>
+Reviewed-By: Francisco Trivino <ftrivino@redhat.com>
+---
+ daemons/ipa-kdb/ipa_kdb_principals.c | 23 ++++++++++++-----------
+ 1 file changed, 12 insertions(+), 11 deletions(-)
+
+diff --git a/daemons/ipa-kdb/ipa_kdb_principals.c b/daemons/ipa-kdb/ipa_kdb_principals.c
+index 15f3df4fe..0d0d3748c 100644
+--- a/daemons/ipa-kdb/ipa_kdb_principals.c
++++ b/daemons/ipa-kdb/ipa_kdb_principals.c
+@@ -788,17 +788,18 @@ static krb5_error_code ipadb_parse_ldap_entry(krb5_context kcontext,
+                                       &res_key_data, &result, &mkvno);
+     switch (ret) {
+     case 0:
+-        /* Only set a principal's key if password auth can be used. Otherwise
+-         * the KDC would add pre-authentication methods to the NEEDED_PREAUTH
+-         * reply for AS-REQs which indicate the password authentication is
+-         * available. This might confuse applications like e.g. SSSD which try
+-         * to determine suitable authentication methods and corresponding
+-         * prompts with the help of MIT Kerberos' responder interface which
+-         * acts on the returned pre-authentication methods. A typical example
+-         * is enforced OTP authentication where of course keys are available
+-         * for the first factor but password authentication should not be
+-         * advertised by the KDC. */
+-        if (!(ua & IPADB_USER_AUTH_PASSWORD) && (ua != IPADB_USER_AUTH_NONE)) {
++        /* Only set a principal's key if password or hardened auth can be used.
++         * Otherwise the KDC would add pre-authentication methods to the
++         * NEEDED_PREAUTH reply for AS-REQs which indicate the password
++         * authentication is available. This might confuse applications like
++         * e.g. SSSD which try to determine suitable authentication methods and
++         * corresponding prompts with the help of MIT Kerberos' responder
++         * interface which acts on the returned pre-authentication methods. A
++         * typical example is enforced OTP authentication where of course keys
++         * are available for the first factor but password authentication
++         * should not be advertised by the KDC. */
++        if (!(ua & (IPADB_USER_AUTH_PASSWORD | IPADB_USER_AUTH_HARDENED)) &&
++            (ua != IPADB_USER_AUTH_NONE)) {
+             /* This is the same behavior as ENOENT below. */
+             ipa_krb5_free_key_data(res_key_data, result);
+             break;
+-- 
+2.34.1
+
+From 294ae35a61e6ca8816b261c57508e4be21221864 Mon Sep 17 00:00:00 2001
+From: Julien Rische <jrische@redhat.com>
+Date: Tue, 1 Feb 2022 19:38:29 +0100
+Subject: [PATCH] ipatests: add case for hardened-only ticket policy
+
+Signed-off-by: Julien Rische <jrische@redhat.com>
+Reviewed-By: Alexander Bokovoy <abokovoy@redhat.com>
+Reviewed-By: Francisco Trivino <ftrivino@redhat.com>
+---
+ ipatests/test_integration/test_krbtpolicy.py | 30 ++++++++++++++++++--
+ 1 file changed, 28 insertions(+), 2 deletions(-)
+
+diff --git a/ipatests/test_integration/test_krbtpolicy.py b/ipatests/test_integration/test_krbtpolicy.py
+index 63e75ae67..9489fbc97 100644
+--- a/ipatests/test_integration/test_krbtpolicy.py
++++ b/ipatests/test_integration/test_krbtpolicy.py
+@@ -103,8 +103,8 @@ class TestPWPolicy(IntegrationTest):
+         result = master.run_command('klist | grep krbtgt')
+         assert maxlife_within_policy(result.stdout_text, MAXLIFE) is True
+ 
+-    def test_krbtpolicy_hardended(self):
+-        """Test a hardened kerberos ticket policy with 10 min tickets"""
++    def test_krbtpolicy_password_and_hardended(self):
++        """Test a pwd and hardened kerberos ticket policy with 10min tickets"""
+         master = self.master
+         master.run_command(['ipa', 'user-mod', USER1,
+                             '--user-auth-type', 'password',
+@@ -131,6 +131,32 @@ class TestPWPolicy(IntegrationTest):
+         result = master.run_command('klist | grep krbtgt')
+         assert maxlife_within_policy(result.stdout_text, MAXLIFE) is True
+ 
++    def test_krbtpolicy_hardended(self):
++        """Test a hardened kerberos ticket policy with 30min tickets"""
++        master = self.master
++        master.run_command(['ipa', 'user-mod', USER1,
++                            '--user-auth-type', 'hardened'])
++        master.run_command(['ipa', 'config-mod',
++                            '--user-auth-type', 'hardened'])
++        master.run_command(['ipa', 'krbtpolicy-mod', USER1,
++                            '--hardened-maxlife', '1800'])
++
++        tasks.kdestroy_all(master)
++
++        master.run_command(['kinit', USER1],
++                           stdin_text=PASSWORD + '\n')
++        result = master.run_command('klist | grep krbtgt')
++        assert maxlife_within_policy(result.stdout_text, 1800,
++                                     slush=1800) is True
++
++        tasks.kdestroy_all(master)
++
++        # Verify that the short policy only applies to USER1
++        master.run_command(['kinit', USER2],
++                           stdin_text=PASSWORD + '\n')
++        result = master.run_command('klist | grep krbtgt')
++        assert maxlife_within_policy(result.stdout_text, MAXLIFE) is True
++
+     def test_krbtpolicy_password(self):
+         """Test the kerberos ticket policy which issues 20 min tickets"""
+         master = self.master
+-- 
+2.34.1
+

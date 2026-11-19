@@ -1,0 +1,47 @@
+From 653a7fe02880c168755984133ee143567cc7bb4e Mon Sep 17 00:00:00 2001
+From: Francisco Trivino <ftrivino@redhat.com>
+Date: Wed, 26 Jan 2022 15:43:39 +0100
+Subject: [PATCH] Custodia: use a stronger encryption algo when exporting keys
+
+The Custodia key export handler is using the default's OpenSSL encryption
+scheme for PKCS#12.
+
+This represents an issue when performing a migration from CentOS Stream 8 (C8S)
+to CentOS Steam 9 (C9S) where the Custodia client running in the new C9S
+replica talks to the Custodia server on C8S source server. The later creates an
+encrypted PKCS#12 file that contains the cert and the key using the OpenSSL's
+default encryption scheme, which is no longer supported on C9S.
+
+This commit enforces a stronger encryption algorigthm by adding following
+arguments to the Custodia server handler:
+
+-keypbe AES-256-CBC -certpbe AES-256-CBC -macalg sha384
+
+The new arguments enforce stronger PBEv2 instead of the insecure PBEv1.
+
+Fixes: https://pagure.io/freeipa/issue/9101
+
+Signed-off-by: Francisco Trivino <ftrivino@redhat.com>
+Reviewed-By: Christian Heimes <cheimes@redhat.com>
+Reviewed-By: Florence Blanc-Renaud <flo@redhat.com>
+---
+ ipaserver/secrets/handlers/pemfile.py | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/ipaserver/secrets/handlers/pemfile.py b/ipaserver/secrets/handlers/pemfile.py
+index 4e8eff0e3..ad36bd020 100644
+--- a/ipaserver/secrets/handlers/pemfile.py
++++ b/ipaserver/secrets/handlers/pemfile.py
+@@ -31,6 +31,9 @@ def export_key(args, tmpdir):
+         '-out', pk12file,
+         '-inkey', args.keyfile,
+         '-password', 'file:{pk12pwfile}'.format(pk12pwfile=pk12pwfile),
++        '-keypbe', 'AES-256-CBC',
++        '-certpbe', 'AES-256-CBC',
++        '-macalg', 'sha384',
+     ])
+ 
+     with open(pk12file, 'rb') as f:
+-- 
+2.34.1
+

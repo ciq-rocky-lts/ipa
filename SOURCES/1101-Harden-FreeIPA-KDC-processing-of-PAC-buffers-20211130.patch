@@ -1,0 +1,122 @@
+From 7d93bda31ce0b4e0e22c6e464c9138800dcf8b1c Mon Sep 17 00:00:00 2001
+From: Alexander Bokovoy <abokovoy@redhat.com>
+Date: Fri, 26 Nov 2021 11:13:51 +0200
+Subject: [PATCH] ipa-kdb: fix requester SID check according to MS-KILE and
+ MS-SFU updates
+
+New versions of MS-KILE and MS-SFU after Windows Server November 2021
+security updates add PAC_REQUESTER_SID buffer check behavior:
+
+ - PAC_REQUESTER_SID should only be added for TGT requests
+
+ - if PAC_REQUESTER_SID is present, KDC must verify that the cname on
+   the ticket resolves to the account with the same SID as the
+   PAC_REQUESTER_SID. If it doesn't KDC must respond with
+   KDC_ERR_TKT_REVOKED
+
+Change requester SID check to skip exact check for non-local
+PAC_REQUESTER_SID but harden to ensure it comes from the trusted domains
+we know about.
+
+If requester SID is the same as in PAC, we already do cname vs PAC SID
+verification.
+
+With these changes FreeIPA works against Windows Server 2019 with
+November 2021 security fixes in cross-realm S4U2Self operations.
+
+Fixes: https://pagure.io/freeipa/issue/9031
+
+Signed-off-by: Alexander Bokovoy <abokovoy@redhat.com>
+Reviewed-By: Rob Crittenden <rcritten@redhat.com>
+---
+ daemons/ipa-kdb/ipa_kdb_mspac.c | 47 ++++++++++++++++++++++++---------
+ 1 file changed, 34 insertions(+), 13 deletions(-)
+
+diff --git a/daemons/ipa-kdb/ipa_kdb_mspac.c b/daemons/ipa-kdb/ipa_kdb_mspac.c
+index 538cfbba9..1b972c167 100644
+--- a/daemons/ipa-kdb/ipa_kdb_mspac.c
++++ b/daemons/ipa-kdb/ipa_kdb_mspac.c
+@@ -1697,7 +1697,7 @@ static krb5_error_code check_logon_info_consistent(krb5_context context,
+                                       "local [%s], PAC [%s]",
+                                       dom ? dom : "<failed to display>",
+                                       sid ? sid : "<failed to display>");
+-            return KRB5KDC_ERR_POLICY;
++            return KRB5KDC_ERR_TGT_REVOKED;
+         }
+     }
+ 
+@@ -1709,7 +1709,7 @@ static krb5_error_code check_logon_info_consistent(krb5_context context,
+     kerr = ipadb_get_principal(context, client_princ, flags, &client_actual);
+     if (kerr != 0) {
+         krb5_klog_syslog(LOG_ERR, "PAC issue: ipadb_get_principal failed.");
+-        return KRB5KDC_ERR_POLICY;
++        return KRB5KDC_ERR_TGT_REVOKED;
+     }
+ 
+     ied = (struct ipadb_e_data *)client_actual->e_data;
+@@ -1743,7 +1743,7 @@ static krb5_error_code check_logon_info_consistent(krb5_context context,
+                                   "local [%s] vs PAC [%s]",
+                                   local_sid ? local_sid : "<failed to display>",
+                                   pac_sid ? pac_sid : "<failed to display>");
+-        kerr = KRB5KDC_ERR_POLICY;
++        kerr = KRB5KDC_ERR_TGT_REVOKED;
+         goto done;
+     }
+ 
+@@ -2005,22 +2005,43 @@ static krb5_error_code ipadb_check_logon_info(krb5_context context,
+     /* Check that requester SID is the same as in the PAC entry */
+     if (requester_sid != NULL) {
+         struct dom_sid client_sid;
++        bool is_from_trusted_domain = false;
+         kerr = ipadb_get_sid_from_pac(tmpctx, info.info, &client_sid);
+         if (kerr) {
+             goto done;
+         }
+         result = dom_sid_check(&client_sid, requester_sid, true);
+         if (!result) {
+-            /* memctx is freed by the caller */
+-            char *pac_sid = dom_sid_string(tmpctx, &client_sid);
+-            char *req_sid = dom_sid_string(tmpctx, requester_sid);
+-            krb5_klog_syslog(LOG_ERR, "PAC issue: PAC has a SID "
+-                                      "different from what PAC requester claims. "
+-                                      "PAC [%s] vs PAC requester [%s]",
+-                                      pac_sid ? pac_sid : "<failed to display>",
+-                                      req_sid ? req_sid : "<failed to display>");
+-            kerr = KRB5KDC_ERR_POLICY;
+-            goto done;
++            struct ipadb_context *ipactx = ipadb_get_context(context);
++            if (!ipactx || !ipactx->mspac) {
++                return KRB5_KDB_DBNOTINITED;
++            }
++            /* In S4U case we might be dealing with the PAC issued by the trusted domain */
++            if (is_s4u && (ipactx->mspac->trusts != NULL)) {
++                /* Iterate through list of trusts and check if this SID belongs to
++                * one of the domains we trust */
++                for(int i = 0 ; i < ipactx->mspac->num_trusts ; i++) {
++                    result = dom_sid_check(&ipactx->mspac->trusts[i].domsid,
++                                           requester_sid, false);
++                    if (result) {
++                        is_from_trusted_domain = true;
++                        break;
++                    }
++                }
++            }
++
++            if (!is_from_trusted_domain) {
++                /* memctx is freed by the caller */
++                char *pac_sid = dom_sid_string(tmpctx, &client_sid);
++                char *req_sid = dom_sid_string(tmpctx, requester_sid);
++                krb5_klog_syslog(LOG_ERR, "PAC issue: PAC has a SID "
++                                        "different from what PAC requester claims. "
++                                        "PAC [%s] vs PAC requester [%s]",
++                                        pac_sid ? pac_sid : "<failed to display>",
++                                        req_sid ? req_sid : "<failed to display>");
++                kerr = KRB5KDC_ERR_TGT_REVOKED;
++                goto done;
++            }
+         }
+     }
+ 
+-- 
+2.31.1
+

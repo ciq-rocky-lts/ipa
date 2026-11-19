@@ -1,0 +1,40 @@
+From 4c54e9d6ddb72eab6f654bf3dc2d29f27498ac96 Mon Sep 17 00:00:00 2001
+From: Florence Blanc-Renaud <flo@redhat.com>
+Date: Sun, 5 Dec 2021 17:38:58 +0100
+Subject: [PATCH] ipatests: fix
+ TestOTPToken::test_check_otpd_after_idle_timeout
+
+The test sets 389-ds nsslapd-idletimeout to 60s, then does a
+kinit with an otp token (which makes ipa-otpd create a LDAP
+connection), then sleeps for 60s. The expectation is that
+ns-slapd will detect that the LDAP conn from ipa-otpd is idle
+and close the connection.
+According to 389ds doc, the idle timeout is enforced when the
+connection table is walked. By doing a ldapsearch, the test
+"wakes up" ns-slapd and forces the detection of ipa-otpd
+idle connection.
+
+Fixes: https://pagure.io/freeipa/issue/9044
+Signed-off-by: Florence Blanc-Renaud <flo@redhat.com>
+Reviewed-By: Anuja More <amore@redhat.com>
+---
+ ipatests/test_integration/test_otp.py | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/ipatests/test_integration/test_otp.py b/ipatests/test_integration/test_otp.py
+index 353470897..d8ce527ca 100644
+--- a/ipatests/test_integration/test_otp.py
++++ b/ipatests/test_integration/test_otp.py
+@@ -354,6 +354,9 @@ class TestOTPToken(IntegrationTest):
+             otpvalue = totp.generate(int(time.time())).decode("ascii")
+             kinit_otp(self.master, USER, password=PASSWORD, otp=otpvalue)
+             time.sleep(60)
++            # ldapsearch will wake up slapd and force walking through
++            # the connection list, in order to spot the idle connections
++            tasks.ldapsearch_dm(self.master, "", ldap_args=[], scope="base")
+ 
+             def test_cb(cmd_jornalctl):
+                 # check if LDAP connection is timed out
+-- 
+2.34.1
+

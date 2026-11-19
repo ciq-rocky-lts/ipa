@@ -1,0 +1,38 @@
+From 186ebe311bc9545d7a9860cd5e8c748131bbe41e Mon Sep 17 00:00:00 2001
+From: Francisco Trivino <ftrivino@redhat.com>
+Date: Thu, 10 Feb 2022 14:23:12 +0100
+Subject: [PATCH] ipa_cldap: fix memory leak
+
+ipa_cldap_encode_netlogon() allocates memory to store binary data as part of
+berval (bv_val) when processing a CLDAP packet request from a worker. The
+data is used by ipa_cldap_respond() but bv_val is not freed later on.
+
+This commit is adding the corresponding free() after ipa_cldap_respond()
+is completed.
+
+Discovered by LeakSanitizer
+
+Fixes: https://pagure.io/freeipa/issue/9110
+Signed-off-by: Francisco Trivino <ftrivino@redhat.com>
+Reviewed-By: Alexander Bokovoy <abokovoy@redhat.com>
+Reviewed-By: Rob Crittenden <rcritten@redhat.com>
+Reviewed-By: Thierry Bordaz <tbordaz@redhat.com>
+---
+ daemons/ipa-slapi-plugins/ipa-cldap/ipa_cldap_worker.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/daemons/ipa-slapi-plugins/ipa-cldap/ipa_cldap_worker.c b/daemons/ipa-slapi-plugins/ipa-cldap/ipa_cldap_worker.c
+index db4a3d061..252bcf647 100644
+--- a/daemons/ipa-slapi-plugins/ipa-cldap/ipa_cldap_worker.c
++++ b/daemons/ipa-slapi-plugins/ipa-cldap/ipa_cldap_worker.c
+@@ -287,6 +287,7 @@ done:
+     ipa_cldap_respond(ctx, req, &reply);
+ 
+     ipa_cldap_free_kvps(&req->kvps);
++    free(reply.bv_val);
+     free(req);
+     return;
+ }
+-- 
+2.34.1
+

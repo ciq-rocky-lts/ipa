@@ -1,0 +1,75 @@
+From b9c42fed9b6f60801f908c368d0d97a2a69f7bb2 Mon Sep 17 00:00:00 2001
+From: Florence Blanc-Renaud <flo@redhat.com>
+Date: Wed, 15 Dec 2021 10:47:02 +0100
+Subject: [PATCH] Config plugin: return EmptyModlist when no change is applied
+
+When ipa config-mod is called with the option --enable-sid,
+the code needs to trap EmptyModlist exception (it is expected
+that no LDAP attribute is modified by this operation).
+The code had a flaw and was checking:
+    'enable_sid' in options
+instead of
+    options['enable_sid']
+
+"'enable_sid' in options" always returns true as this option
+is a Flag with a default value, hence always present even if
+not specified on the command line.
+
+Fixes: https://pagure.io/freeipa/issue/9063
+Reviewed-By: Rob Crittenden <rcritten@redhat.com>
+---
+ ipaserver/plugins/config.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/ipaserver/plugins/config.py b/ipaserver/plugins/config.py
+index eae401fc3..24446beb0 100644
+--- a/ipaserver/plugins/config.py
++++ b/ipaserver/plugins/config.py
+@@ -707,7 +707,7 @@ class config_mod(LDAPUpdate):
+         if (isinstance(exc, errors.EmptyModlist) and
+                 call_func.__name__ == 'update_entry' and
+                 ('ca_renewal_master_server' in options or
+-                 'enable_sid' in options)):
++                 options['enable_sid'])):
+             return
+ 
+         super(config_mod, self).exc_callback(
+-- 
+2.34.1
+
+From cd735099e86304294217147ed578ac902fcf3dd3 Mon Sep 17 00:00:00 2001
+From: Florence Blanc-Renaud <flo@redhat.com>
+Date: Wed, 15 Dec 2021 10:51:05 +0100
+Subject: [PATCH] config plugin: add a test ensuring EmptyModlist is returned
+
+Add a test to test_config_plugin, that calls ipa config-mod
+with the same value as already present in LDAP.
+The call must return EmptyModlist.
+
+Related: https://pagure.io/freeipa/issue/9063
+Reviewed-By: Rob Crittenden <rcritten@redhat.com>
+---
+ ipatests/test_xmlrpc/test_config_plugin.py | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/ipatests/test_xmlrpc/test_config_plugin.py b/ipatests/test_xmlrpc/test_config_plugin.py
+index e981bb4a0..a8ec9f0e5 100644
+--- a/ipatests/test_xmlrpc/test_config_plugin.py
++++ b/ipatests/test_xmlrpc/test_config_plugin.py
+@@ -312,4 +312,13 @@ class test_config(Declarative):
+                 'value': None,
+             },
+         ),
++        dict(
++            desc='Set the value to the already set value, no modifications',
++            command=(
++                'config_mod', [], {
++                    'ipasearchrecordslimit': u'100',
++                },
++            ),
++            expected=errors.EmptyModlist(),
++        ),
+     ]
+-- 
+2.34.1
+

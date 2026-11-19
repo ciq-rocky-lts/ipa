@@ -1,0 +1,166 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Alexander Bokovoy <abokovoy@redhat.com>
+Date: Tue, 8 Sep 2026 09:54:57 +0300
+Subject: [PATCH 2053/2056] ipatests: fix XMLRPC test expecations
+
+Two classes of behavior changes:
+
+ - permission baseline is now 'read', not 'write'
+ - self-service LDAP ACI is slightly different
+
+Related: CVE-2026-79678
+
+Signed-off-by: Alexander Bokovoy <abokovoy@redhat.com>
+Reviewed-By: Florence Blanc-Renaud <flo@redhat.com>
+(cherry picked from commit a8d9fdebcc1072f751b772fdd5bd37e072cb2669)
+Backport-Note: dropped expectations for the MissingTargetAttributesinPermission warning, which 4.9.8 does not emit
+Co-Authored-By: Andrew Jorgensen <ajorgens@ciq.com>
+---
+ .../test_xmlrpc/test_permission_plugin.py     | 30 +++++++++++++------
+ .../test_xmlrpc/test_selfservice_plugin.py    |  8 ++---
+ 2 files changed, 25 insertions(+), 13 deletions(-)
+
+diff --git a/ipatests/test_xmlrpc/test_permission_plugin.py b/ipatests/test_xmlrpc/test_permission_plugin.py
+index b0f1e483f..1d28cb11b 100644
+--- a/ipatests/test_xmlrpc/test_permission_plugin.py
++++ b/ipatests/test_xmlrpc/test_permission_plugin.py
+@@ -3182,6 +3182,18 @@ class test_permission_bindtype(Declarative):
+             expected=dict(
+                 value=permission1,
+                 summary=u'Added permission "%s"' % permission1,
++                messages=(
++                    {
++                        'message': ('The permission has read rights but no '
++                                    'attributes are set.'),
++                        'code': 13032,
++                        'type': 'warning',
++                        'name': 'MissingTargetAttributesinPermission',
++                        'data': {
++                            'right': 'read',
++                        }
++                    },
++                ),
+                 result=dict(
+                     dn=permission1_dn,
+                     cn=[permission1],
+@@ -3248,7 +3260,7 @@ class test_permission_bindtype(Declarative):
+                     cn=[permission1],
+                     objectclass=objectclasses.permission,
+                     type=[u'user'],
+-                    ipapermright=[u'write'],
++                    ipapermright=[u'read'],
+                     ipapermbindruletype=[u'all'],
+                     ipapermissiontype=[u'SYSTEM', u'V2'],
+                     ipapermlocation=[users_dn],
+@@ -3260,7 +3272,7 @@ class test_permission_bindtype(Declarative):
+             permission1, users_dn,
+             '(targetfilter = "(objectclass=posixaccount)")' +
+             '(version 3.0;acl "permission:%s";' % permission1 +
+-            'allow (write) userdn = "ldap:///all";)',
++            'allow (read) userdn = "ldap:///all";)',
+         ),
+ 
+         dict(
+@@ -3289,7 +3301,7 @@ class test_permission_bindtype(Declarative):
+                         dn=permission1_dn,
+                         cn=[permission1],
+                         type=[u'user'],
+-                        ipapermright=[u'write'],
++                        ipapermright=[u'read'],
+                         ipapermbindruletype=[u'all'],
+                         objectclass=objectclasses.permission,
+                         ipapermissiontype=[u'SYSTEM', u'V2'],
+@@ -3339,7 +3351,7 @@ class test_permission_bindtype(Declarative):
+                     cn=[permission1_renamed],
+                     type=[u'user'],
+                     objectclass=objectclasses.permission,
+-                    ipapermright=[u'write'],
++                    ipapermright=[u'read'],
+                     ipapermbindruletype=[u'all'],
+                     ipapermissiontype=[u'SYSTEM', u'V2'],
+                     ipapermlocation=[users_dn],
+@@ -3351,7 +3363,7 @@ class test_permission_bindtype(Declarative):
+             permission1_renamed, users_dn,
+             '(targetfilter = "(objectclass=posixaccount)")' +
+             '(version 3.0;acl "permission:%s";' % permission1_renamed +
+-            'allow (write) userdn = "ldap:///all";)',
++            'allow (read) userdn = "ldap:///all";)',
+         ),
+ 
+         dict(
+@@ -3370,7 +3382,7 @@ class test_permission_bindtype(Declarative):
+                     cn=[permission1_renamed],
+                     objectclass=objectclasses.permission,
+                     type=[u'user'],
+-                    ipapermright=[u'write'],
++                    ipapermright=[u'read'],
+                     ipapermbindruletype=[u'permission'],
+                     ipapermissiontype=[u'SYSTEM', u'V2'],
+                     ipapermlocation=[users_dn],
+@@ -3382,7 +3394,7 @@ class test_permission_bindtype(Declarative):
+             permission1_renamed, users_dn,
+             '(targetfilter = "(objectclass=posixaccount)")' +
+             '(version 3.0;acl "permission:%s";' % permission1_renamed +
+-            'allow (write) groupdn = "ldap:///%s";)' % permission1_renamed_dn,
++            'allow (read) groupdn = "ldap:///%s";)' % permission1_renamed_dn,
+         ),
+ 
+         dict(
+@@ -3399,7 +3411,7 @@ class test_permission_bindtype(Declarative):
+                     cn=[permission1],
+                     type=[u'user'],
+                     objectclass=objectclasses.permission,
+-                    ipapermright=[u'write'],
++                    ipapermright=[u'read'],
+                     ipapermbindruletype=[u'permission'],
+                     ipapermissiontype=[u'SYSTEM', u'V2'],
+                     ipapermlocation=[users_dn],
+@@ -3411,7 +3423,7 @@ class test_permission_bindtype(Declarative):
+             permission1, users_dn,
+             '(targetfilter = "(objectclass=posixaccount)")' +
+             '(version 3.0;acl "permission:%s";' % permission1 +
+-            'allow (write) groupdn = "ldap:///%s";)' % permission1_dn,
++            'allow (read) groupdn = "ldap:///%s";)' % permission1_dn,
+         ),
+ 
+         dict(
+diff --git a/ipatests/test_xmlrpc/test_selfservice_plugin.py b/ipatests/test_xmlrpc/test_selfservice_plugin.py
+index 335b703fd..6b0cafcf2 100644
+--- a/ipatests/test_xmlrpc/test_selfservice_plugin.py
++++ b/ipatests/test_xmlrpc/test_selfservice_plugin.py
+@@ -799,7 +799,7 @@ class test_selfservice_cli_add_del(Declarative):
+                      r'(version 3.0;acl '
+                      r'\22selfservice:selfservice_add_1002\22;'
+                      r'allow (write) (userdn = \22ldap:///self\22 '
+-                     r'and userdn = \22ldap:///all\22;)',
++                     r'and userdn = \22ldap:///all\22);)',
+             ),
+         ),
+ 
+@@ -877,7 +877,7 @@ class test_selfservice_cli_add_del(Declarative):
+                      r'(version 3.0;acl '
+                      r'\22selfservice:selfservice_add_1005\22;'
+                      r'allow (write) (userdn = \22ldap:///self\22 '
+-                     r'and userdn = \22ldap:///all\22;)',
++                     r'and userdn = \22ldap:///all\22);)',
+             ),
+         ),
+ 
+@@ -1587,7 +1587,7 @@ class test_selfservice_mod_cli(Declarative):
+                     r'(version 3.0;acl '
+                     r'\22selfservice:%s\22;'
+                     r'allow (write) (userdn = \22ldap:///self\22 '
+-                    r'and userdn = \22ldap:///all\22;)'
++                    r'and userdn = \22ldap:///all\22);)'
+                 ) % SS_CLI_MOD,
+             ),
+         ),
+@@ -1654,7 +1654,7 @@ class test_selfservice_mod_cli(Declarative):
+                     r'(version 3.0;acl '
+                     r'\22selfservice:%s\22;'
+                     r'allow (write) (userdn = \22ldap:///self\22 '
+-                    r'and userdn = \22ldap:///all\22;)'
++                    r'and userdn = \22ldap:///all\22);)'
+                 ) % SS_CLI_MOD,
+             ),
+         ),

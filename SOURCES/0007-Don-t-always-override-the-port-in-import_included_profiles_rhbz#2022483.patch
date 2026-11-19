@@ -1,0 +1,104 @@
+From edb216849e4f47d6cae95981edf0c3fe2653fd7a Mon Sep 17 00:00:00 2001
+From: Rob Crittenden <rcritten@redhat.com>
+Date: Fri, 28 Jan 2022 16:46:35 -0500
+Subject: [PATCH] Don't always override the port in import_included_profiles
+
+I can only guess to the original purpose of this override. I
+believe it was because this is called in the installer prior
+to Apache being set up. The expectation was that this would
+only be called locally. It predates the RestClient class.
+
+RestClient will attempt to find an available service. In this
+case, during a CA installation, the local server is not
+considered available because it lacks an entry in
+cn=masters. So it will never be returned as an option.
+
+So by overriding the port to 8443 the remote connection will
+likely fail because we don't require that the port be open.
+
+So instead, instantiate a RestClient and see what happens.
+
+There are several use-cases:
+
+1. Installing an initial server. The RestClient connection
+   should fail, so we will fall back to the override port and
+   use the local server. If Apache happens to be running with
+   a globally-issued certificate then the RestClient will
+   succeed. In this case if the connected host and the local
+   hostname are the same, override in that case as well.
+
+2. Installing as a replica. In this case the local server should
+   be ignored in all cases and a remote CA will be picked with
+   no override done.
+
+3. Switching from CA-less to CA-ful. The web server will be
+   trusted but the RestClient login will fail with a 404. Fall
+   back to the override port in this case.
+
+The motivation for this is trying to install an EL 8.x replica
+against an EL 7.9 server. 8.5+ includes the ACME service and
+a new profile is needed which doesn't exist in 7. This was
+failing because the RestClient determined that the local server
+wasn't running a CA so tried the remote one (7.9) on the override
+port 8443. Since this port isn't open: failure.
+
+Chances are that adding the profile is still going to fail
+because again, 7.9 lacks ACME capabilities, but it will fail in
+a way that allows the installation to continue.
+
+I suspect that all of the overrides can similarly handled, or
+handled directly within the RestClient class, but for the sake
+of "do no harm" I'm only changing this instance for now.
+
+https://pagure.io/freeipa/issue/9100
+
+Signed-off-by: Rob Crittenden <rcritten@redhat.com>
+Reviewed-By: Florence Blanc-Renaud <frenaud@redhat.com>
+---
+ ipaserver/install/cainstance.py | 30 +++++++++++++++++++++++++++++-
+ 1 file changed, 29 insertions(+), 1 deletion(-)
+
+diff --git a/ipaserver/install/cainstance.py b/ipaserver/install/cainstance.py
+index 8c8bf1b3a..ad206aad4 100644
+--- a/ipaserver/install/cainstance.py
++++ b/ipaserver/install/cainstance.py
+@@ -1953,7 +1953,35 @@ def import_included_profiles():
+         cn=['certprofiles'],
+     )
+ 
+-    api.Backend.ra_certprofile.override_port = 8443
++    # At this point Apache may or may not be running with a valid
++    # certificate. The local server is not yet recognized as a full
++    # CA yet so it isn't discoverable. So try to do some detection
++    # on what port to use, 443 (remote) or 8443 (local) for importing
++    # the profiles.
++    #
++    # api.Backend.ra_certprofile invokes the RestClient class
++    # which will discover and login to the CA REST API. We can
++    # use this information to detect where to import the profiles.
++    #
++    # If the login is successful (e.g. doesn't raise an exception)
++    # and it returns our hostname (it prefers the local host) then
++    # we override and talk locally.
++    #
++    # Otherwise a NetworkError means we can't connect on 443 (perhaps
++    # a firewall) or we get an HTTP error (valid TLS certificate on
++    # Apache but no CA, login fails with 404) so we override to the
++    # local server.
++    #
++    # When override port was always set to 8443 the RestClient could
++    # pick a remote server and since 8443 isn't in our firewall profile
++    # setting up a new server would fail.
++    try:
++        with api.Backend.ra_certprofile as profile_api:
++            if profile_api.ca_host == api.env.host:
++                api.Backend.ra_certprofile.override_port = 8443
++    except (errors.NetworkError, errors.RemoteRetrieveError) as e:
++        logger.debug('Overriding CA port: %s', e)
++        api.Backend.ra_certprofile.override_port = 8443
+ 
+     for (profile_id, desc, store_issued) in dogtag.INCLUDED_PROFILES:
+         dn = DN(('cn', profile_id),
+-- 
+2.34.1
+
