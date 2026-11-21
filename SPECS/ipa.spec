@@ -191,7 +191,7 @@
 
 Name:                 %{package_name}
 Version:              %{IPA_VERSION}
-Release:              8%{?rc_version:.%rc_version}.1%{?dist}
+Release:              8%{?rc_version:.%rc_version}.2%{?dist}
 Summary:              The Identity, Policy and Audit system
 
 License:              GPLv3+
@@ -286,6 +286,10 @@ Patch1154:            2053-ipatests-fix-XMLRPC-test-expecations.patch
 Patch1155:            2054-permission-enforcement-allow-services-to-define-keys.patch
 Patch1156:            2055-ipa-pwd-extop-allow-password-expiration-override-on-.patch
 Patch1157:            2056-kdb-rework-cross-realm-PAC-validation-and-ID-overrid.patch
+Patch1158:            2057-Check-the-HTTP-Referer-header-on-all-requests.patch
+Patch1159:            2058-kdb-apply-combinatorial-logic-for-ticket-flags.patch
+Patch1160:            2059-rpcserver-validate-Kerberos-principal-name-before-ru.patch
+Patch1161:            2060-validate_principal-Don-t-try-to-verify-that-the-real.patch
 
 # For the timestamp trick in patch application
 BuildRequires:        diffstat
@@ -1775,6 +1779,13 @@ fi
 
 
 %changelog
+* Thu Nov 19 2026 Andrew Jorgensen <ajorgens@ciq.com> - 4.9.8-8.2
+- Fix CVE-2023-5455: CSRF via login, password change and session API
+- Fix CVE-2024-1481: login requests could pass options to kinit
+- Fix CVE-2024-3183: KDC issued tickets usable to guess user passwords
+- KDC no longer issues service tickets for user principals by default
+- Global ticket policy flags now add to a principal's own flags
+
 * Thu Nov 19 2026 Andrew Jorgensen <ajorgens@ciq.com> - 4.9.8-8.1
 - Fix CVE-2025-4404, CVE-2025-7493: host to domain admin escalation
 - Fix CVE-2026-11861: TGS impersonation through trust relationships
